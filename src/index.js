@@ -1,8 +1,8 @@
 import Schema from '@deepseek-ai/schemastery'
-import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs'
+import { createReadStream, existsSync, lstatSync, readdirSync, realpathSync, statSync, unlinkSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const name = 'dsh-columbina-theme'
@@ -178,6 +178,32 @@ function dataDir() {
   return join(home, 'storages', 'dsh-columbina-theme')
 }
 
+/**
+ * Resolve `name` inside `baseDir` and require its real path to stay inside
+ * `baseDir` (symlink-safe). Returns the resolved real path, or null when the
+ * file is missing or a planted symlink escapes the base directory.
+ */
+function containedPath(baseDir, name) {
+  try {
+    const real = realpathSync(join(baseDir, name))
+    const base = realpathSync(baseDir)
+    const prefix = base.endsWith(sep) ? base : base + sep
+    if (real === base || real.startsWith(prefix)) return real
+  } catch {
+    // Missing or unresolvable — treat as not found.
+  }
+  return null
+}
+
+/** Remove a symlink at `file` (if any) so writes never traverse it. */
+function unlinkIfSymlink(file) {
+  try {
+    if (lstatSync(file).isSymbolicLink()) unlinkSync(file)
+  } catch {
+    // Not present — nothing to do.
+  }
+}
+
 function customFilePath(ext) {
   return join(dataDir(), `custom-bg.${ext}`)
 }
@@ -209,6 +235,7 @@ function jsonResponse(res, status, body) {
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
     'content-length': Buffer.byteLength(payload),
   })
   res.end(payload)
@@ -516,8 +543,8 @@ function servePreset(res, id) {
     res.end('not found')
     return
   }
-  const file = join(ASSETS_DIR, preset.file)
-  if (!existsSync(file)) {
+  const file = containedPath(ASSETS_DIR, preset.file)
+  if (!file) {
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
     res.end('not found')
     return
@@ -525,6 +552,7 @@ function servePreset(res, id) {
   res.writeHead(200, {
     'content-type': preset.type,
     'cache-control': 'public, max-age=86400',
+    'x-content-type-options': 'nosniff',
   })
   createReadStream(file).pipe(res)
 }
@@ -543,7 +571,8 @@ async function serveThumb(res, id) {
     return
   }
   const source = join(ASSETS_DIR, preset.file)
-  const target = join(dataDir(), 'thumbs', `${id}.${THUMB_EXT}`)
+  const relative = `thumbs/${id}.${THUMB_EXT}`
+  const target = join(dataDir(), relative)
   try {
     if (!existsSync(target)) {
       const sharp = await getSharp()
@@ -553,17 +582,26 @@ async function serveThumb(res, id) {
         return
       }
       await mkdir(dirname(target), { recursive: true })
+      // Never write through a planted symlink.
+      unlinkIfSymlink(target)
       await sharp(source)
         .rotate()
         .resize({ width: THUMB_WIDTH, withoutEnlargement: true })
         .jpeg({ quality: 80 })
         .toFile(target)
     }
+    const safe = containedPath(dataDir(), relative)
+    if (!safe) {
+      res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end('forbidden')
+      return
+    }
     res.writeHead(200, {
       'content-type': 'image/jpeg',
       'cache-control': 'public, max-age=86400',
+      'x-content-type-options': 'nosniff',
     })
-    createReadStream(target).pipe(res)
+    createReadStream(safe).pipe(res)
   } catch {
     res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
     res.end('thumbnail failed')
@@ -578,8 +616,8 @@ function serveCustom(res, name) {
     res.end('not found')
     return
   }
-  const file = join(dataDir(), name)
-  if (!existsSync(file)) {
+  const file = containedPath(dataDir(), name)
+  if (!file) {
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
     res.end('not found')
     return
@@ -587,6 +625,7 @@ function serveCustom(res, name) {
   res.writeHead(200, {
     'content-type': contentTypeFor(match[1]),
     'cache-control': 'public, max-age=86400',
+    'x-content-type-options': 'nosniff',
   })
   createReadStream(file).pipe(res)
 }
