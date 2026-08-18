@@ -29,6 +29,9 @@
     "@deepseek-ai/schemastery": "^3.18.1",
     "sharp": "^0.35.3"
   },
+  "devDependencies": {
+    "playwright-core": "^1.62.1"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.7",

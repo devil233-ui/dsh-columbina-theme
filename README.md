@@ -46,10 +46,10 @@ dsh plugin --profile web add github:hyposelen1a/dsh-columbina-theme
 dsh plugin --profile web add dsh-columbina-theme
 ```
 
-本地开发调试（link 方式）：
+本地开发调试（link 方式，路径换成你的实际目录）：
 
 ```powershell
-dsh plugin --profile web add link:C:/dsh/columbina-theme
+dsh plugin --profile web add link:/path/to/dsh-columbina-theme
 ```
 
 也可以手动编辑 `$DSH_HOME/profiles/web/package.json`，把 `dsh-columbina-theme` 加入 `dependencies` 和 `dsh.profile.bundles`，然后在该目录执行 `pnpm install`。
@@ -111,7 +111,7 @@ scripts/screenshot.mjs   生成 README 截图
 
 ```powershell
 # 在临时工作目录启动一个测试实例
-cd C:\dsh\columbina-e2e-ws
+cd /path/to/your-temp-workspace
 dsh --profile web --port 0
 # 另开一个终端，把输出里的 URL 传给脚本
 $env:E2E_BASE = "http://127.0.0.1:<端口>"

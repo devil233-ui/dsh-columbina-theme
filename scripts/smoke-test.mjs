@@ -1,15 +1,26 @@
 import { createRequire } from 'node:module'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 
-const require = createRequire('C:/Users/zhzx/dsh-dafeiyu/test/')
+// playwright-core resolves from this package's own node_modules (devDependency).
+const require = createRequire(import.meta.url)
 const { chromium } = require('playwright-core')
 
 const BASE = process.env.E2E_BASE || 'http://127.0.0.1:61010'
 const SHOT_DIR = new URL('../docs/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
 mkdirSync(SHOT_DIR, { recursive: true })
 
+// Browser executable: $EDGE_PATH wins; otherwise common install locations.
+const browserPath = [
+  process.env.EDGE_PATH,
+  'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+  'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
+  'C:/Program Files/Google/Chrome/Application/chrome.exe',
+  '/usr/bin/microsoft-edge',
+  '/usr/bin/google-chrome',
+].find((p) => p && existsSync(p))
+
 const browser = await chromium.launch({
-  executablePath: 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+  executablePath: browserPath,
   headless: true,
   args: ['--no-first-run', '--disable-extensions'],
 })
