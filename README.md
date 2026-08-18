@@ -24,6 +24,10 @@
 | --- | --- |
 | ![浅色模式](docs/screenshot-light.png) | ![深色模式](docs/screenshot-dark.png) |
 
+## 兼容性
+
+针对 **DeepSeek Harness `0.1.0-rc.7`** 开发（`@deepseek-ai/cordis ^4.0.1`、`dsh-* ^0.1.0-rc.7`）。DSH 仍处于 developer preview 阶段，接口可能发生破坏性变更；升级 DSH 后如发现主题失效，请先查看 [CHANGELOG](CHANGELOG.md) 与仓库的 release 说明。
+
 ## 安装
 
 前置条件：DeepSeek Harness（`dsh`）、Node.js ≥ 22、pnpm 在 PATH。
