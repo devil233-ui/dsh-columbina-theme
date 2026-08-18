@@ -1,0 +1,11 @@
+- insert:
+    - id: dsh-columbina-theme
+      name: dsh-columbina-theme
+      config:
+        background: ""
+        maskOpacity: 0.45
+        maskColor: ""
+        inputColor: ""
+        sidebarColor: ""
+        fontColor: ""
+        activeTitle: true

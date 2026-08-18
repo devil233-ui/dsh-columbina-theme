@@ -1,0 +1,62 @@
+{
+  "name": "dsh-columbina-theme",
+  "version": "0.1.0",
+  "description": "A Genshin Impact Columbina (哥伦比娅) themed plugin for DeepSeek Harness Web: preset/custom background images with a translucent mask, per light/dark scheme palettes, and a special glow for the active conversation title.",
+  "author": "columbina-theme contributors",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src/",
+    "lib/client.js",
+    "assets/backgrounds/",
+    "docs/screenshot-home.png",
+    "docs/screenshot-settings.png",
+    "cordis.patch.yml",
+    "CHANGELOG.md",
+    "ASSET_LICENSE.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.19"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "sharp": "^0.35.3"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ],
+      "platform": "web"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "theme",
+    "genshin",
+    "columbina"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hyposelen1a/dsh-columbina-theme.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hyposelen1a/dsh-columbina-theme/issues"
+  },
+  "homepage": "https://github.com/hyposelen1a/dsh-columbina-theme#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT"
+}
