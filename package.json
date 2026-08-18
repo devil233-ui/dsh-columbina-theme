@@ -14,8 +14,6 @@
     "src/",
     "lib/client.js",
     "assets/backgrounds/",
-    "docs/screenshot-home.png",
-    "docs/screenshot-settings.png",
     "cordis.patch.yml",
     "CHANGELOG.md",
     "ASSET_LICENSE.md",
