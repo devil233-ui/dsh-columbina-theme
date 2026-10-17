@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.0] - 2026-10-18
+
+### Changed
+
+- 适配 DeepSeek Harness `0.2.1-rc.2`（`cordis ^4.0.5`、`dsh-* ^0.2.0-rc.1`）。
+- 设置改用 DSH 0.2 的插件 Config / settings forms 模型：`src/index.js` 导出的 `Config` 字段全部标记为 `volatile`，经 `ctx.settings.describe/update` 按插件条目 id 读写；删除了对已移除的 `ctx.settings.register` 与 `@deepseek-ai/dsh-client-ui-slots` 包的依赖（保留旧宿主上的 `register` 回退）。
+- 设置卡片注册到 0.2 的两个插槽：`settings.plugins.tab`（设置 → 内置插件 → 哥伦比娅主题）与 `plugins.bundle.config`（插件页 `dsh-columbina-theme` 详情页）；旧版 `settings.plugin.item` 仍保留为回退。
+- 设置改存于 `$DSH_HOME/profiles/<profile>/cordis.patch.yml` 的插件条目；首次启动时自动把旧 `settings.yaml` 中 `dsh-columbina-theme` 段落迁移过来（仅当该条目尚无用户配置）。
+- 明暗切换的监听改为同时使用 `theme/change` 快照与 `data-ds-dark-theme` MutationObserver，修复订阅顺序导致深色模式下背景不切换的问题；卸载时释放 `overrideTokens` 图层。
+- `cordis.patch.yml` 不再写入默认 config，默认值交给 Config schema，避免默认值挡住旧设置迁移。
+
+### Fixed
+
+- 0.2 下 `ctx.settings.register` 不存在导致插件加载失败的问题。
+- 深色 / 浅色切换时 `--columbina-bg-image` 不跟着切换的问题。
+- 设置卡片在插件详情页中的可读性（使用 `--dsw-alias-settings-card-fill` 作为卡片底色）。
+
 ## [0.1.0] - 2026-08-18
 
 ### Added

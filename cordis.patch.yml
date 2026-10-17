@@ -1,11 +1,7 @@
+# Bundle patch: insert this plugin's Loader entry. Field defaults live in the
+# exported Config schema (src/index.js), so the entry carries no config layer
+# until the user changes a setting — that keeps the legacy settings.yaml
+# import working on first upgrade.
 - insert:
     - id: dsh-columbina-theme
       name: dsh-columbina-theme
-      config:
-        background: ""
-        maskOpacity: 0.45
-        maskColor: ""
-        inputColor: ""
-        sidebarColor: ""
-        fontColor: ""
-        activeTitle: true

@@ -1,13 +1,37 @@
+/**
+ * End-to-end smoke test for the Columbina theme on DSH 0.2.x.
+ *
+ * Start an isolated test host first, then pass its authenticated URL:
+ *
+ *   $env:DSH_HOME = 'C:\path\to\.e2e-home'
+ *   dsh plugin --profile e2e add link:C:\path\to\dsh-columbina-theme
+ *   dsh --profile e2e --port 0 --no-open
+ *   $env:E2E_BASE = "http://127.0.0.1:<port>/?token=<token>"
+ *   node scripts/smoke-test.mjs
+ *
+ * The test only writes through the plugin's own settings surface and restores
+ * the background/activeTitle fields before exiting.
+ */
 import { createRequire } from 'node:module'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 
 // playwright-core resolves from this package's own node_modules (devDependency).
 const require = createRequire(import.meta.url)
 const { chromium } = require('playwright-core')
 
-const BASE = process.env.E2E_BASE || 'http://127.0.0.1:61010'
-const SHOT_DIR = new URL('../docs/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
-mkdirSync(SHOT_DIR, { recursive: true })
+const BASE = process.env.E2E_BASE
+if (!BASE) {
+  console.error('E2E_BASE is required (use the authenticated URL printed by `dsh web`)')
+  process.exit(1)
+}
+const origin = new URL(BASE).origin
+const CONFIG = `${origin}/plugins/dsh-columbina-theme/config`
+const SHOT_DIR = new URL('../.e2e-home/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+const failures = []
+const check = (name, ok, detail) => {
+  console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail === undefined ? '' : `: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`}`)
+  if (!ok) failures.push(name)
+}
 
 // Browser executable: $EDGE_PATH wins; otherwise common install locations.
 const browserPath = [
@@ -19,6 +43,17 @@ const browserPath = [
   '/usr/bin/google-chrome',
 ].find((p) => p && existsSync(p))
 
+const fetchConfig = async () => (await fetch(CONFIG, { cache: 'no-store' })).json()
+const waitForConfig = async (predicate, timeout = 15000) => {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    const config = await fetchConfig()
+    if (predicate(config)) return config
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  throw new Error('timed out waiting for the config endpoint')
+}
+
 const browser = await chromium.launch({
   executablePath: browserPath,
   headless: true,
@@ -29,9 +64,15 @@ const errors = []
 page.on('console', (msg) => { if (msg.type() === 'error') errors.push(`[console] ${msg.text()}`) })
 page.on('pageerror', (err) => errors.push(`[pageerror] ${String(err)}`))
 
-await page.goto(BASE, { waitUntil: 'networkidle', timeout: 45000 })
+await page.goto(BASE, { waitUntil: 'networkidle', timeout: 60000 })
 await page.waitForSelector('style[data-plugin="dsh-columbina-theme"]', { state: 'attached', timeout: 20000 })
-await page.waitForTimeout(1200)
+await page.waitForTimeout(800)
+// A fresh home shows the onboarding dialog over the shell; dismiss it.
+await page.evaluate(() => {
+  const dialog = document.querySelector('[role="dialog"]')
+  dialog?.querySelector('button[aria-label="关闭"], button[aria-label="Close"]')?.click()
+})
+await page.waitForTimeout(500)
 
 const applied = await page.evaluate(() => {
   const row = document.querySelector('[role="treeitem"][aria-selected="true"]')
@@ -45,83 +86,93 @@ const applied = await page.evaluate(() => {
     titleAttr: document.body.getAttribute('data-columbina-title'),
     tokenBgBase: document.body.style.getPropertyValue('--dsw-alias-bg-base'),
     tokenLabel: document.body.style.getPropertyValue('--dsw-alias-label-primary'),
-    computedBodyBg: getComputedStyle(document.body).backgroundColor,
     sidebarFillResolved: getComputedStyle(document.body).getPropertyValue('--dsw-specific-sidebar-fill'),
-    maskRgbResolved: getComputedStyle(document.body).getPropertyValue('--columbina-mask-rgb'),
     selectedRow: !!row,
     selectedTitleColor: titleSpan ? getComputedStyle(titleSpan).color : null,
-    selectedTitleBgImage: titleSpan ? getComputedStyle(titleSpan).backgroundImage.slice(0, 80) : null,
+    selectedTitleBgImage: titleSpan ? getComputedStyle(titleSpan).backgroundImage.slice(0, 60) : null,
     selectedTitleWeight: titleSpan ? getComputedStyle(titleSpan).fontWeight : null,
   }
 })
 console.log('APPLIED:', JSON.stringify(applied, null, 2))
-await page.screenshot({ path: `${SHOT_DIR}preview-e2e-home.png` })
+check('first-paint style tag', applied.staticStyle)
+check('background layer painted', applied.bgLayerImage.includes('/plugins/dsh-columbina-theme/'), applied.bgLayerImage)
+check('mask layer painted', applied.maskLayerColor.startsWith('rgba('), applied.maskLayerColor)
+check('theme tokens applied on body', applied.tokenBgBase.startsWith('rgba('), applied.tokenBgBase)
+check('selected session title glow', applied.selectedRow && applied.selectedTitleBgImage.includes('gradient'), applied.selectedTitleBgImage)
+check('selected title weight', applied.selectedTitleWeight === '600', applied.selectedTitleWeight)
+if (existsSync(SHOT_DIR)) await page.screenshot({ path: `${SHOT_DIR}preview-e2e-home.png` })
 
-// Open settings via the 设置 button, then the 插件 tab.
-const settingsInfo = await page.evaluate(() => {
-  const btn = [...document.querySelectorAll('button')].find((b) => {
-    const label = (b.getAttribute('aria-label') || b.title || b.textContent || '').trim()
-    return label === '设置' || label === 'Settings' || label.includes('设置')
+// Open the Plugins manager from the sidebar and the installed bundle's page.
+const clickText = (text, exact = true) => page.evaluate(({ value, exactMatch }) => {
+  const nodes = [...document.querySelectorAll('button, a, [role="treeitem"], [role="tab"], [role="menuitem"]')]
+  const target = nodes.find((el) => {
+    const label = (el.textContent || '').trim()
+    return exactMatch ? label === value : label.startsWith(value)
   })
-  if (!btn) return null
-  return {
-    aria: btn.getAttribute('aria-label'),
-    title: btn.title,
-    text: (btn.textContent || '').trim(),
-    className: (btn.className || '').toString().slice(0, 80),
-  }
-})
-console.log('SETTINGS BUTTON INFO:', JSON.stringify(settingsInfo, null, 2))
+  if (!target) return false
+  target.click()
+  return true
+}, { value: text, exactMatch: exact })
+
+check('plugins page opened', await clickText('插件'))
+await page.waitForTimeout(800)
+check('installed plugin row', await clickText('dsh-columbina-theme'))
+const card = page.locator('[data-testid="dsh-columbina-theme-settings"]')
+await card.waitFor({ state: 'visible', timeout: 15000 })
+check('settings card mounted on the bundle page', await card.isVisible())
+
+const swatches = await page.evaluate(() => [...document.querySelectorAll('[data-testid="dsh-columbina-theme-settings"] button')]
+  .filter((button) => button.title !== '')
+  .map((button) => button.style.backgroundImage)
+  .filter(Boolean)
+  .map((value) => value.replace(/^url\("?/, '').replace(/"?\)$/, '')))
+console.log('SWATCHES:', JSON.stringify(swatches))
+check('two preset swatches', swatches.length >= 2, swatches.length)
+check('swatches load preview thumbnails', swatches.every((url) => url.includes('/thumbs/')), swatches)
+
+// Click the second preset and wait for the persisted setting.
 const clicked = await page.evaluate(() => {
-  const btn = [...document.querySelectorAll('button')].find((b) => {
-    const label = (b.getAttribute('aria-label') || b.title || b.textContent || '').trim()
-    return label === '设置' || label === 'Settings' || label.includes('设置')
-  })
-  if (btn) { btn.click(); return true }
-  return false
+  const buttons = [...document.querySelectorAll('[data-testid="dsh-columbina-theme-settings"] button')]
+  const target = buttons.find((button) => (button.title || '') === 'columbina-2')
+  if (!target) return null
+  target.click()
+  return target.title
 })
-console.log('SETTINGS CLICKED:', clicked)
-await page.waitForTimeout(1500)
-await page.screenshot({ path: `${SHOT_DIR}preview-e2e-settings-open.png` })
+check('second preset clicked', clicked === 'columbina-2', clicked)
+const afterBackground = await waitForConfig((config) => config.background === 'columbina-2')
+check('background setting persisted', afterBackground.background === 'columbina-2', afterBackground.background)
 
-let cardFound = false
-if (clicked) {
-  const tabs = await page.evaluate(() =>
-    [...document.querySelectorAll('[role="tab"], button')]
-      .map((b) => (b.getAttribute('aria-label') || b.title || b.textContent || '').trim())
-      .filter((t) => /插件|Plugins|常规|General/.test(t)).slice(0, 10),
-  )
-  console.log('TABS:', JSON.stringify(tabs, null, 2))
-  const tabClicked = await page.evaluate(() => {
-    const tab = [...document.querySelectorAll('[role="tab"], button')].find(
-      (b) => /^(插件|Plugins)$/.test((b.getAttribute('aria-label') || b.title || b.textContent || '').trim()),
-    )
-    if (tab) { tab.click(); return true }
-    return false
-  })
-  console.log('PLUGINS TAB CLICKED:', tabClicked)
-  await page.waitForTimeout(1500)
-  cardFound = await page.evaluate(() => !!document.querySelector('[data-testid="dsh-columbina-theme-settings"]'))
-  console.log('CARD PRESENT:', cardFound)
-  if (cardFound) {
-    await page.screenshot({ path: `${SHOT_DIR}preview-e2e-settings.png` })
-    const cardText = await page.evaluate(() => document.querySelector('[data-testid="dsh-columbina-theme-settings"]')?.textContent?.slice(0, 300))
-    console.log('CARD TEXT:', JSON.stringify(cardText))
-    const swatches = await page.evaluate(() =>
-      [...document.querySelectorAll('[data-testid="dsh-columbina-theme-settings"] button')]
-        .map((b) => b.style.backgroundImage)
-        .filter(Boolean)
-        .map((v) => v.replace(/^url\("?/, '').replace(/"?\)$/, '').split('/').pop()),
-    )
-    console.log('SWATCH IMAGES:', JSON.stringify(swatches))
-    const dialogBg = await page.evaluate(() => {
-      const dialog = document.querySelector('[role="dialog"]')
-      return dialog ? getComputedStyle(dialog).backgroundColor : null
-    })
-    console.log('SETTINGS DIALOG BG:', dialogBg)
-  }
-}
+// Toggle the active-title effect off and check the live attribute.
+const toggled = await page.evaluate(() => {
+  const input = document.querySelector('[data-testid="dsh-columbina-theme-settings"] input[type="checkbox"]')
+  if (!input) return false
+  input.click()
+  return true
+})
+check('active title checkbox toggled', toggled)
+await waitForConfig((config) => config.activeTitle === false)
+await page.waitForTimeout(300)
+check('title attribute retracted live', (await page.evaluate(() => document.body.hasAttribute('data-columbina-title'))) === false)
 
-console.log('ERRORS:', JSON.stringify(errors, null, 2))
+// Reload: the host-rendered static style must already carry the saved values.
+await page.reload({ waitUntil: 'networkidle', timeout: 60000 })
+await page.waitForTimeout(800)
+const reloaded = await page.evaluate(() => ({
+  style: document.querySelector('style[data-plugin="dsh-columbina-theme"]')?.textContent ?? '',
+  titleAttr: document.body.hasAttribute('data-columbina-title'),
+}))
+check('first paint uses the saved background', reloaded.style.includes('/assets/columbina-2.png'), reloaded.style.match(/--columbina-bg-image:[^;]+/)?.[0])
+check('first paint keeps the title effect off', reloaded.titleAttr === false)
+
+// Restore the auto background and the default title effect for the next run.
+await fetch(CONFIG, {
+  method: 'PATCH',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ background: '', activeTitle: true }),
+})
+
+await page.waitForTimeout(300)
+if (existsSync(SHOT_DIR)) await page.screenshot({ path: `${SHOT_DIR}preview-e2e-final.png` })
+console.log('ERRORS:', JSON.stringify(errors.slice(0, 10), null, 2))
 await browser.close()
-process.exit(cardFound ? 0 : 2)
+process.exit(failures.length === 0 ? 0 : 2)

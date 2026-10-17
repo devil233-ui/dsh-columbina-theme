@@ -26,7 +26,7 @@
 
 ## 兼容性
 
-针对 **DeepSeek Harness `0.1.0-rc.7`** 开发（`@deepseek-ai/cordis ^4.0.1`、`dsh-* ^0.1.0-rc.7`）。DSH 仍处于 developer preview 阶段，接口可能发生破坏性变更；升级 DSH 后如发现主题失效，请先查看 [CHANGELOG](CHANGELOG.md) 与仓库的 release 说明。
+针对 **DeepSeek Harness `0.2.1-rc.2`**（`0.2.x` 系列）开发：`@deepseek-ai/cordis ^4.0.5`、`dsh-* ^0.2.0-rc.1`（已在 `0.2.1-rc.2` 上验证）。设置改用 DSH 0.2 的插件 Config / settings forms 模型（volatile 字段热更新），不再依赖已删除的 `ctx.settings.register` 与 `@deepseek-ai/dsh-client-ui-slots` 包。DSH 仍处于 developer preview 阶段，接口可能发生破坏性变更；升级 DSH 后如发现主题失效，请先查看 [CHANGELOG](CHANGELOG.md) 与仓库的 release 说明。
 
 ## 安装
 
@@ -54,13 +54,15 @@ dsh plugin --profile web add link:/path/to/dsh-columbina-theme
 
 也可以手动编辑 `$DSH_HOME/profiles/web/package.json`，把 `dsh-columbina-theme` 加入 `dependencies` 和 `dsh.profile.bundles`，然后在该目录执行 `pnpm install`。
 
+> Desktop 桌面版（`DSH_PROFILE=desktop`）把上面命令里的 `--profile web` 换成 `--profile desktop`。
+
 ### 3. 重启 DSH Web
 
-重新启动 `dsh web`，并**硬刷新浏览器**（Ctrl+F5）。打开 **设置 → 插件 → 哥伦比娅主题** 即可配置。
+重新启动 `dsh web`，并**硬刷新浏览器**（Ctrl+F5）。打开 **设置 → 内置插件 → 哥伦比娅主题**，或在 **插件** 页打开 `dsh-columbina-theme` 的详情页，即可配置。
 
 ### 临时禁用
 
-不用卸载，编辑 `$DSH_HOME/profiles/web/cordis.patch.yml` 加两行并重启：
+不用卸载，编辑 `$DSH_HOME/profiles/<profile>/cordis.patch.yml` 加两行并重启：
 
 ```yaml
 - id: dsh-columbina-theme
@@ -71,7 +73,10 @@ dsh plugin --profile web add link:/path/to/dsh-columbina-theme
 
 ## 使用
 
-设置路径：**设置 → 插件 → 哥伦比娅主题**。
+设置入口（两个等价位置）：
+
+- **设置 → 内置插件 → 哥伦比娅主题**
+- **插件 → dsh-columbina-theme**（插件详情页）
 
 | 设置项 | 说明 |
 | --- | --- |
@@ -84,7 +89,7 @@ dsh plugin --profile web add link:/path/to/dsh-columbina-theme
 | 侧边栏颜色 | 自定义侧边栏颜色（始终不透明；留空 = 跟随明暗主题） |
 | 选中会话标题特效 | 开关当前会话标题的渐变 + 光晕效果 |
 
-设置保存在 `$DSH_HOME/settings.yaml`（`dsh-columbina-theme` 命名空间）；上传的自定义图片与预设缩略图缓存保存在 `$DSH_HOME/storages/dsh-columbina-theme/`。
+设置保存在 `$DSH_HOME/profiles/<profile>/cordis.patch.yml` 中 `dsh-columbina-theme` 条目的 `config`（DSH 0.2 的插件配置层），修改后立即生效、无需重启。旧版本写在 `$DSH_HOME/settings.yaml` 的同名段落会在首次启动时自动迁移一次（仅当该条目尚未有用户配置时）。上传的自定义图片与预设缩略图缓存仍保存在 `$DSH_HOME/storages/dsh-columbina-theme/`。
 
 ### 添加自己的预设背景
 
@@ -95,10 +100,13 @@ dsh plugin --profile web add link:/path/to/dsh-columbina-theme
 ## 开发
 
 ```text
-src/index.js    Host 插件：设置注册、config/上传端点、预设/缩略图/自定义图片静态路由；
+src/index.js    Host 插件：导出 Config（全部字段 volatile）+ apply；
+                通过 ctx.settings.describe/update 读写本插件条目的配置，
+                config/上传端点、预设/缩略图/自定义图片静态路由；
                 webServer.tapIndex 把主题 <style> 注入每次 index.html（首帧即生效）
 lib/client.js   浏览器插件：主题 token 覆盖（ctx.theme.overrideTokens）、
                 --columbina-* 自定义属性、选中标题特效、设置卡片
+                （注册到 settings.plugins.tab 与 plugins.bundle.config）
 assets/backgrounds/  预设背景目录：放入图片即自动成为新预设
 cordis.patch.yml     bundle 补丁（向组合中插入插件条目）
 scripts/smoke-test.mjs   端到端冒烟测试（需要 playwright-core 与系统 Edge/Chrome）
@@ -107,14 +115,16 @@ scripts/screenshot.mjs   生成 README 截图
 
 主题在两端各有一份取值表（host 的 `SCHEME_DEFAULTS`/`surfaceTokens`/`labelTokens` 与 client 的 `buildTokens`），两者必须保持一致——host 负责首帧静态注入，client 负责运行期热更新（presenter 写入的 body 内联变量优先于静态样式表）。改动任何一边后重启 DSH Web 生效，并可用冒烟测试核对。
 
-冒烟测试（需先启动一个测试实例）：
+冒烟测试（需要 DSH 0.2 的已认证 URL；脚本会关闭首次启动的引导弹窗）：
 
 ```powershell
-# 在临时工作目录启动一个测试实例
-cd /path/to/your-temp-workspace
-dsh --profile web --port 0
-# 另开一个终端，把输出里的 URL 传给脚本
-$env:E2E_BASE = "http://127.0.0.1:<端口>"
+# 在临时 DSH_HOME 中创建一个测试 profile，并 link 本插件
+$env:DSH_HOME = "C:\path\to\.e2e-home"
+dsh --profile e2e --from-default-profile web --dump-config
+dsh plugin --profile e2e add link:C:\path\to\dsh-columbina-theme
+dsh --profile e2e --port 0 --no-open
+# 把输出里的已认证 URL（含 ?token=…）传给脚本
+$env:E2E_BASE = "http://127.0.0.1:<端口>/?token=<token>"
 node scripts/smoke-test.mjs
 ```
 
@@ -122,7 +132,7 @@ node scripts/smoke-test.mjs
 
 - 选中会话标题特效依赖会话行的 DOM 结构（`role="treeitem"` + 标题 span 的 `_title` 类后缀），DSH 界面内部类名随版本变化时可能需要调整选择器。
 - 表面透明度通过 CSS token 覆盖实现，DSH 版本升级后个别表面可能不再受控。
-- 多实例共享 `$DSH_HOME/settings.yaml` 时，并发写入以最后一次为准。
+- 设置写入使用 DSH 的 settings forms（profile patch 层）；多实例共享同一 profile 时，并发写入以最后一次为准。
 
 ## 素材版权说明
 

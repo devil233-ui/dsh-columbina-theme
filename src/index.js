@@ -1,11 +1,15 @@
 import Schema from '@deepseek-ai/schemastery'
 import { createReadStream, existsSync, lstatSync, readdirSync, realpathSync, statSync, unlinkSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { parse as parseYaml } from 'yaml'
 
 export const name = 'dsh-columbina-theme'
+
+/** Profile entry id this bundle's patch inserts; also the settings form namespace. */
+export const SETTINGS_NS = 'dsh-columbina-theme'
 
 /** File extension → content type for preset images. */
 const PRESET_TYPES = Object.freeze({
@@ -92,32 +96,57 @@ const UPLOAD_TYPES = Object.freeze({
 
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 
+/**
+ * Mark one preference field live-editable. DSH 0.2 derives a plugin's settings
+ * form from its exported `Config`: a field carrying `meta.volatile` is written
+ * through the Loader's live-commit path instead of remounting the plugin, and
+ * only volatile fields are writable from the settings surface. `volatile()`
+ * returns a copy (`extra()`), so the marked schema must be assigned back.
+ */
+function live(schema) {
+  return typeof schema.volatile === 'function' ? schema.volatile() : schema
+}
+
 export const Config = Schema.object({
-  background: Schema.string()
-    .description('背景：预设 id，或 custom:<扩展名>；空字符串 = 浅色/深色各用默认背景')
-    .default(''),
-  maskOpacity: Schema.number()
-    .min(0)
-    .max(1)
-    .step(0.05)
-    .default(0.45)
-    .role('slider')
-    .description('蒙版不透明度：0 = 原图效果，越高越不透明，100 = 完全覆盖为主题底色'),
-  maskColor: Schema.string()
-    .description('蒙版颜色（空字符串 = 跟随明暗配色的默认底色）')
-    .default(''),
-  inputColor: Schema.string()
-    .description('输入框颜色（空字符串 = 跟随明暗配色的默认色；输入框固定 80% 不透明）')
-    .default(''),
-  sidebarColor: Schema.string()
-    .description('侧边栏颜色（空字符串 = 跟随明暗配色的默认色；侧边栏始终不透明）')
-    .default(''),
-  fontColor: Schema.string()
-    .description('字体颜色（空字符串 = 跟随明暗配色的默认色）')
-    .default(''),
-  activeTitle: Schema.boolean()
-    .description('当前会话标题使用渐变高亮特效')
-    .default(true),
+  background: live(
+    Schema.string()
+      .description('背景：预设 id，或 custom:<扩展名>；空字符串 = 浅色/深色各用默认背景')
+      .default(''),
+  ),
+  maskOpacity: live(
+    Schema.number()
+      .min(0)
+      .max(1)
+      .step(0.05)
+      .default(0.45)
+      .role('slider')
+      .description('蒙版不透明度：0 = 原图效果，越高越不透明，100 = 完全覆盖为主题底色'),
+  ),
+  maskColor: live(
+    Schema.string()
+      .description('蒙版颜色（空字符串 = 跟随明暗配色的默认底色）')
+      .default(''),
+  ),
+  inputColor: live(
+    Schema.string()
+      .description('输入框颜色（空字符串 = 跟随明暗配色的默认色；输入框固定 80% 不透明）')
+      .default(''),
+  ),
+  sidebarColor: live(
+    Schema.string()
+      .description('侧边栏颜色（空字符串 = 跟随明暗配色的默认色；侧边栏始终不透明）')
+      .default(''),
+  ),
+  fontColor: live(
+    Schema.string()
+      .description('字体颜色（空字符串 = 跟随明暗配色的默认色）')
+      .default(''),
+  ),
+  activeTitle: live(
+    Schema.boolean()
+      .description('当前会话标题使用渐变高亮特效')
+      .default(true),
+  ),
 }).description('哥伦比娅主题设置')
 
 const defaults = Object.freeze({
@@ -160,22 +189,188 @@ function schemeValue(field, config, scheme) {
   return SCHEME_DEFAULTS[scheme][field]
 }
 
+/**
+ * Read one config field from either a plain settings value or a live fiber
+ * config. DSH 0.2 wraps every `volatile` field in a cosmokit reference that
+ * the Loader updates in place, so `.get()` yields the current value.
+ */
+function unwrapField(value) {
+  return value !== null && typeof value === 'object' && typeof value.get === 'function' ? value.get() : value
+}
+
 function publicConfig(config = {}) {
+  const source = config ?? {}
   return {
-    background: config.background ?? defaults.background,
-    maskOpacity: config.maskOpacity ?? defaults.maskOpacity,
-    maskColor: config.maskColor ?? defaults.maskColor,
-    inputColor: config.inputColor ?? defaults.inputColor,
-    sidebarColor: config.sidebarColor ?? defaults.sidebarColor,
-    fontColor: config.fontColor ?? defaults.fontColor,
-    activeTitle: config.activeTitle ?? defaults.activeTitle,
+    background: unwrapField(source.background) ?? defaults.background,
+    maskOpacity: unwrapField(source.maskOpacity) ?? defaults.maskOpacity,
+    maskColor: unwrapField(source.maskColor) ?? defaults.maskColor,
+    inputColor: unwrapField(source.inputColor) ?? defaults.inputColor,
+    sidebarColor: unwrapField(source.sidebarColor) ?? defaults.sidebarColor,
+    fontColor: unwrapField(source.fontColor) ?? defaults.fontColor,
+    activeTitle: unwrapField(source.activeTitle) ?? defaults.activeTitle,
+  }
+}
+
+/** DSH home directory (profile home), used for the legacy settings import. */
+function dshHome() {
+  return process.env.DSH_HOME || join(homedir(), '.dsh')
+}
+
+/**
+ * The Loader entry id of this plugin's own row. DSH 0.2 addresses settings
+ * forms by the profile entry id, which is a mount choice rather than a package
+ * property, so identify the row by package name plus fiber identity and fall
+ * back to an enabled same-name row before the fiber is attached.
+ */
+function ownEntryId(ctx) {
+  let fallback
+  try {
+    for (const entry of ctx.loader?.entries?.() ?? []) {
+      const id = entry.options?.id
+      if (entry.options?.name !== name || typeof id !== 'string' || id === '') continue
+      if (entry.fiber === ctx.fiber) return id
+      if (entry.disabled !== true && fallback === undefined) fallback = id
+    }
+  } catch {
+    // A loader that does not expose its entries leaves the form unavailable.
+  }
+  return fallback
+}
+
+/**
+ * Read this plugin's section out of the retired `settings.yaml`. Both names
+ * are tried because the settings service renames the document before it
+ * imports any section.
+ */
+async function readLegacySection(home) {
+  const declared = new Set(Object.keys(Config.dict ?? {}))
+  for (const fileName of ['settings.yaml.imported', 'settings.yaml']) {
+    let text
+    try {
+      text = await readFile(join(home, fileName), 'utf8')
+    } catch {
+      continue
+    }
+    let document
+    try {
+      document = parseYaml(text)
+    } catch {
+      continue
+    }
+    if (document === null || typeof document !== 'object' || Array.isArray(document)) continue
+    const section = document[SETTINGS_NS]
+    if (section === null || typeof section !== 'object' || Array.isArray(section)) continue
+    // Only fields the current schema declares: a form write validates every
+    // key against the schema, so one retired key would reject the whole patch.
+    const filtered = Object.fromEntries(Object.entries(section).filter(([key]) => declared.has(key)))
+    if (Object.keys(filtered).length > 0) return filtered
+  }
+  return undefined
+}
+
+/**
+ * Import the preferences a pre-0.2 release persisted in `settings.yaml` into
+ * this row's settings form, once. Never overwrites values the user already
+ * configured after the upgrade.
+ */
+async function importLegacySettings(ctx, settings, ns) {
+  try {
+    await ctx.loader?.await?.()
+    const row = settings.describe?.().find((candidate) => candidate.ns === ns)
+    const user = row?.user
+    if (user !== null && typeof user === 'object' && Object.keys(user).length > 0) return
+    const section = await readLegacySection(ctx.profileContext?.home ?? dshHome())
+    if (section === undefined) return
+    await settings.update(ns, section)
+    ctx.logger?.info?.('dsh-columbina-theme: imported preferences from the retired settings.yaml')
+  } catch (error) {
+    ctx.logger?.warn?.('dsh-columbina-theme: legacy preference import failed')
+    ctx.logger?.warn?.(error)
+  }
+}
+
+/**
+ * The plugin's configuration read/write face.
+ *
+ * DSH 0.2 derives settings from the row's exported `Config` schema
+ * (`ctx.settings.describe/update`, addressed by the Loader entry id); the
+ * pre-0.2 `ctx.settings.register` namespace service is kept as a fallback so
+ * the same bundle still works on older hosts. Values are always returned as a
+ * complete plain object.
+ */
+function createConfigStore(ctx, initial) {
+  const fallback = publicConfig(initial)
+  let read = () => fallback
+  let write = async () => {
+    throw new Error('the DSH settings service is not available in this deployment')
+  }
+
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['settings'], (settingsCtx) => {
+      const settings = settingsCtx.settings
+      if (settings === null || typeof settings !== 'object') return
+
+      // Pre-0.2 hosts keep the registrable settings namespace.
+      if (typeof settings.register === 'function') {
+        const scope = settings.register(SETTINGS_NS, Config, { base: fallback, applies: 'live' })
+        read = () => publicConfig(scope.get())
+        write = async (patch) => {
+          await scope.update(patch)
+        }
+        return
+      }
+
+      if (typeof settings.describe !== 'function' || typeof settings.update !== 'function') return
+      const ns = ownEntryId(ctx)
+      if (ns === undefined) {
+        ctx.logger?.warn?.('dsh-columbina-theme: no Loader entry for this package; settings stay read-only')
+        return
+      }
+
+      // This plugin ships its own settings card, so opt out of the native
+      // auto-form (otherwise Settings would render the same fields twice).
+      if (typeof settings.configure === 'function') {
+        settingsCtx.effect(
+          () => settings.configure({ auto: false }, ctx.fiber),
+          'dsh-columbina-theme: settings page policy',
+        )
+      }
+
+      const descriptor = () => {
+        try {
+          return settings.describe({ redactSecrets: true }).find((candidate) => candidate.ns === ns)
+        } catch {
+          return undefined
+        }
+      }
+      read = () => {
+        const value = descriptor()?.value
+        return publicConfig(value !== null && typeof value === 'object' ? value : fallback)
+      }
+      write = async (patch) => {
+        const revision = descriptor()?.revision
+        try {
+          await settings.update(ns, patch, revision)
+        } catch (error) {
+          // A concurrent edit moved the revision: retry once without the
+          // expected revision (last writer wins, as the old seam did).
+          if (error?.code !== 'SETTINGS_CONFLICT') throw error
+          await settings.update(ns, patch)
+        }
+      }
+      void importLegacySettings(ctx, settings, ns)
+    })
+  }
+
+  return {
+    get: () => read(),
+    update: (patch) => write(patch),
   }
 }
 
 /** Plugin-owned data directory under the DSH home (custom uploads). */
 function dataDir() {
-  const home = process.env.DSH_HOME || join(homedir(), '.dsh')
-  return join(home, 'storages', 'dsh-columbina-theme')
+  return join(dshHome(), 'storages', 'dsh-columbina-theme')
 }
 
 /**
@@ -477,9 +672,9 @@ async function readBody(req, limit) {
   return Buffer.concat(chunks)
 }
 
-export function createConfigHandler(settings) {
+export function createConfigHandler(store) {
   const view = () => ({
-    ...settings.get(),
+    ...store.get(),
     customBackground: currentCustomUrl(),
     presets: listPresets().map(({ id, file, thumb }) => ({ id, file, thumb: thumb ?? null })),
   })
@@ -494,7 +689,7 @@ export function createConfigHandler(settings) {
       return
     }
     try {
-      await settings.update(await readPatch(req))
+      await store.update(await readPatch(req))
       jsonResponse(res, 200, view())
     } catch (error) {
       jsonResponse(res, 400, { error: error instanceof Error ? error.message : String(error) })
@@ -502,7 +697,7 @@ export function createConfigHandler(settings) {
   }
 }
 
-export function createUploadHandler(settings) {
+export function createUploadHandler(store) {
   return async (req, res) => {
     if (!localOnly(req, res)) return
     if (req.method === 'GET') {
@@ -527,7 +722,7 @@ export function createUploadHandler(settings) {
       await writeFile(target, body)
       const url = `${CUSTOM_PREFIX}custom-bg.${ext}`
       // Point the active background at the freshly uploaded image.
-      await settings.update({ background: `custom:${ext}` }).catch(() => {})
+      await store.update({ background: `custom:${ext}` }).catch(() => {})
       jsonResponse(res, 200, { url, background: `custom:${ext}` })
     } catch (error) {
       jsonResponse(res, 400, { error: error instanceof Error ? error.message : String(error) })
@@ -631,24 +826,20 @@ function serveCustom(res, name) {
 }
 
 function mount(ctx, config = {}) {
-  const base = publicConfig(config)
-  const settings = ctx.settings.register('dsh-columbina-theme', Config, {
-    base,
-    applies: 'live',
-  })
+  const store = createConfigStore(ctx, config)
 
   if (typeof ctx.inject === 'function') {
     ctx.inject(['webServer'], (httpCtx) => {
       httpCtx.effect(
-        () => httpCtx.webServer.tapIndex((html) => injectStaticTheme(html, settings.get())),
+        () => httpCtx.webServer.tapIndex((html) => injectStaticTheme(html, store.get())),
         'dsh-columbina-theme: static theme style',
       )
       httpCtx.effect(
-        () => httpCtx.webServer.register({ kind: 'exact', path: CONFIG_ENDPOINT, handler: createConfigHandler(settings) }),
+        () => httpCtx.webServer.register({ kind: 'exact', path: CONFIG_ENDPOINT, handler: createConfigHandler(store) }),
         'dsh-columbina-theme: config endpoint',
       )
       httpCtx.effect(
-        () => httpCtx.webServer.register({ kind: 'exact', path: UPLOAD_ENDPOINT, handler: createUploadHandler(settings) }),
+        () => httpCtx.webServer.register({ kind: 'exact', path: UPLOAD_ENDPOINT, handler: createUploadHandler(store) }),
         'dsh-columbina-theme: upload endpoint',
       )
       httpCtx.effect(
@@ -689,9 +880,5 @@ function mount(ctx, config = {}) {
 }
 
 export function apply(ctx, config = {}) {
-  if (typeof ctx.inject === 'function') {
-    ctx.inject(['settings'], (settingsCtx) => mount(settingsCtx, config))
-    return
-  }
   mount(ctx, config)
 }
