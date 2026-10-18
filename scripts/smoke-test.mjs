@@ -65,7 +65,10 @@ page.on('console', (msg) => { if (msg.type() === 'error') errors.push(`[console]
 page.on('pageerror', (err) => errors.push(`[pageerror] ${String(err)}`))
 
 await page.goto(BASE, { waitUntil: 'networkidle', timeout: 60000 })
-await page.waitForSelector('style[data-plugin="dsh-columbina-theme"]', { state: 'attached', timeout: 20000 })
+// The host now contributes the theme as a structured style row, so the served
+// element has no data-plugin attribute; identify it by its CSS marker.
+await page.waitForFunction(() => [...document.querySelectorAll('style')]
+  .some((element) => element.textContent.includes('/* dsh-columbina-theme */')), { timeout: 20000 })
 await page.waitForTimeout(800)
 // A fresh home shows the onboarding dialog over the shell; dismiss it.
 await page.evaluate(() => {
@@ -77,11 +80,15 @@ await page.waitForTimeout(500)
 const applied = await page.evaluate(() => {
   const row = document.querySelector('[role="treeitem"][aria-selected="true"]')
   const titleSpan = row ? row.querySelector(':scope > span[class$="_title"]') : null
+  const staticStyle = [...document.querySelectorAll('style')]
+    .find((element) => element.textContent.includes('/* dsh-columbina-theme */'))
   return {
-    staticStyle: !!document.querySelector('style[data-plugin="dsh-columbina-theme"]'),
+    staticStyle: !!staticStyle,
     bgLayerImage: getComputedStyle(document.body, '::before').backgroundImage,
     maskLayerColor: getComputedStyle(document.body, '::after').backgroundColor,
+    bodyBgProp: document.body.style.getPropertyValue('--columbina-bg-image'),
     rootBgProp: document.documentElement.style.getPropertyValue('--columbina-bg-image'),
+    bodyMaskProp: document.body.style.getPropertyValue('--columbina-mask-alpha'),
     rootMaskProp: document.documentElement.style.getPropertyValue('--columbina-mask-alpha'),
     titleAttr: document.body.getAttribute('data-columbina-title'),
     tokenBgBase: document.body.style.getPropertyValue('--dsw-alias-bg-base'),
@@ -97,9 +104,24 @@ console.log('APPLIED:', JSON.stringify(applied, null, 2))
 check('first-paint style tag', applied.staticStyle)
 check('background layer painted', applied.bgLayerImage.includes('/plugins/dsh-columbina-theme/'), applied.bgLayerImage)
 check('mask layer painted', applied.maskLayerColor.startsWith('rgba('), applied.maskLayerColor)
+check('layer properties applied inline on body', applied.bodyBgProp.includes('/plugins/dsh-columbina-theme/') && applied.bodyMaskProp !== '', { bodyBgProp: applied.bodyBgProp, bodyMaskProp: applied.bodyMaskProp })
 check('theme tokens applied on body', applied.tokenBgBase.startsWith('rgba('), applied.tokenBgBase)
 check('selected session title glow', applied.selectedRow && applied.selectedTitleBgImage.includes('gradient'), applied.selectedTitleBgImage)
 check('selected title weight', applied.selectedTitleWeight === '600', applied.selectedTitleWeight)
+
+// Simulate the Desktop Windows titlebar attribute: the app's own rule paints
+// the whole frame with the opaque sidebar fill, which would hide the wallpaper
+// layer. The theme must keep that frame on the translucent base surface.
+const desktopFrame = await page.evaluate(() => {
+  const root = document.documentElement
+  const had = root.hasAttribute('data-windows-titlebar')
+  root.setAttribute('data-windows-titlebar', '')
+  const frame = document.querySelector('[class*="_frame"]')
+  const background = frame ? getComputedStyle(frame).backgroundColor : null
+  if (!had) root.removeAttribute('data-windows-titlebar')
+  return { found: !!frame, background }
+})
+check('desktop Windows frame stays translucent', desktopFrame.found && desktopFrame.background.startsWith('rgba('), desktopFrame)
 if (existsSync(SHOT_DIR)) await page.screenshot({ path: `${SHOT_DIR}preview-e2e-home.png` })
 
 // Open the Plugins manager from the sidebar and the installed bundle's page.
@@ -158,7 +180,8 @@ check('title attribute retracted live', (await page.evaluate(() => document.body
 await page.reload({ waitUntil: 'networkidle', timeout: 60000 })
 await page.waitForTimeout(800)
 const reloaded = await page.evaluate(() => ({
-  style: document.querySelector('style[data-plugin="dsh-columbina-theme"]')?.textContent ?? '',
+  style: [...document.querySelectorAll('style')]
+    .find((element) => element.textContent.includes('/* dsh-columbina-theme */'))?.textContent ?? '',
   titleAttr: document.body.hasAttribute('data-columbina-title'),
 }))
 check('first paint uses the saved background', reloaded.style.includes('/assets/columbina-2.png'), reloaded.style.match(/--columbina-bg-image:[^;]+/)?.[0])

@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.1] - 2026-10-18
+
+### Fixed
+
+- 桌面端壁纸不显示：主题不再只通过 `webServer.tapIndex` 注入 HTTP 返回的 index.html，而是改用 `webserver/index-inject` 结构化注入行。WebServer 会把同一张注入表渲染进 Web 端 index，Electron 也会在启动时收取该表并应用到自己的本地 index，因此背景图、蒙版与标题特效在桌面端恢复；颜色本来就经客户端 token 生效，现在图层也齐了。
+- Windows 标题栏布局（`data-windows-titlebar`）会把整个窗口 frame 涂成不透明的侧边栏底色，即使图层已注入也会被遮住；主题现在把该 frame 及其标题栏条改回半透明的 base 表面，壁纸在桌面端可见。
+- 深色模式下运行期修改背景/蒙版颜色不立即生效：客户端把 `--columbina-bg-image`、`--columbina-mask-alpha`、`--columbina-mask-rgb` 写到 `<body>` 内联样式（而不是 `<html>`），避免被注入样式表中 `body[data-ds-dark-theme]` 的同名声明遮蔽。
+- 清除自定义蒙版颜色后深色模式仍保留旧值：客户端现在始终写入当前配色的具体蒙版 RGB，而不是删除属性后回落到可能过期的静态样式。
+
+### Changed
+
+- `buildStaticStyle()` 保留为旧宿主 `tapIndex` 的回退；新增 `buildStaticInjections()` 生成 `{ kind: 'style' }` 与 `{ kind: 'script', placement: 'body' }` 行（与 DSH 自身主题的注入方式一致）。冒烟测试改为按 CSS 标记定位注入的样式。
+
 ## [0.2.0] - 2026-10-18
 
 ### Changed

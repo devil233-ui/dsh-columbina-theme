@@ -38,7 +38,8 @@ const page = await browser.newPage({ viewport: { width: 1600, height: 900 } })
 const errors = []
 page.on('pageerror', (err) => errors.push(String(err)))
 await page.goto(BASE, { waitUntil: 'networkidle', timeout: 60000 })
-await page.waitForSelector('style[data-plugin="dsh-columbina-theme"]', { state: 'attached', timeout: 20000 })
+await page.waitForFunction(() => [...document.querySelectorAll('style')]
+  .some((element) => element.textContent.includes('/* dsh-columbina-theme */')), { timeout: 20000 })
 await page.waitForTimeout(1800)
 
 const clickText = (text) => page.evaluate((value) => {

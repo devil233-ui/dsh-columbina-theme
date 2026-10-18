@@ -457,15 +457,20 @@ function localOnly(req, res) {
 }
 
 // ---------------------------------------------------------------------------
-// Static theme layer (webServer.tapIndex seam)
+// Static theme layer (webserver/index-inject seam)
 //
-// The host bakes a <style> with the background/mask layers and the surface
-// translucency + label token overrides into every served index.html, so the
-// theme is already applied at first paint — no flash, no dependency on the
-// client bundle. The browser half then re-applies the same values dynamically
-// through ctx.theme.overrideTokens (presenter writes them inline on <body>,
-// which outranks these stylesheet rules) and by setting the --columbina-*
-// custom properties inline on <html>.
+// The host contributes a <style> row (plus the title boot script) to the
+// WebServer's structured index injection table. Two renderers consume that one
+// table, so the theme is applied at first paint in both surfaces:
+//   - HTTP: the SPA dist server renders the rows into every served index.html.
+//   - Desktop: Electron loads its own local index and receives the collected
+//     rows over IPC, applying them before the app boots.
+// Raw webServer.tapIndex transforms are NOT part of that table (Electron never
+// calls renderIndex), so they are kept only as a fallback for hosts that
+// predate the structured row API. The browser half re-applies the same values
+// dynamically through ctx.theme.overrideTokens (presenter writes them inline on
+// <body>, which outranks these stylesheet rules) and by setting the
+// --columbina-* custom properties inline on <body>.
 // NOTE: the token value tables below mirror lib/client.js buildTokens() —
 // keep both halves in sync when adjusting colors.
 // ---------------------------------------------------------------------------
@@ -608,13 +613,19 @@ function tokenBlock(selector, tokens) {
   return `${selector}{${body}}`
 }
 
+/** Marker kept in the injected CSS so the smoke test can identify the style element. */
+const STATIC_STYLE_MARKER = '/* dsh-columbina-theme */'
+
+/** Boot script that enables the selected-session title effect before app mount. */
+const TITLE_BOOT_SCRIPT = "document.body&&document.body.setAttribute('data-columbina-title','on')"
+
 /**
- * Build the static theme <style> for one config. Uses `html body` (and
- * `html body[data-ds-dark-theme]`) so the token overrides outrank the base
+ * Build the static CSS for one config (no <style> wrapper). Uses `html body`
+ * (and `html body[data-ds-dark-theme]`) so the token overrides outrank the base
  * sheets' plain `body` rules, while the ThemePresenter's inline variables
  * (from the browser half's overrideTokens) still outrank this stylesheet.
  */
-export function buildStaticStyle(config) {
+function buildStaticCss(config) {
   const c = publicConfig(config)
   const urlLight = resolveBackgroundUrl(c, 'light')
   const urlDark = resolveBackgroundUrl(c, 'dark')
@@ -628,7 +639,29 @@ export function buildStaticStyle(config) {
   }
   const maskRgbLight = maskRgbString(schemeValue('maskColor', c, 'light'), 'light')
   const maskRgbDark = maskRgbString(schemeValue('maskColor', c, 'dark'), 'dark')
-  return `<style data-plugin="dsh-columbina-theme" data-dsh-columbina-static="1">:root{--columbina-bg-image:${bgLight};--columbina-mask-alpha:${maskAlpha};--columbina-mask-rgb:${maskRgbLight}}body[data-ds-dark-theme]{--columbina-bg-image:${bgDark};--columbina-mask-rgb:${maskRgbDark}}body::before{content:"";position:fixed;inset:0;z-index:-2;background:var(--columbina-bg-image) center/cover no-repeat;pointer-events:none}body::after{content:"";position:fixed;inset:0;z-index:-1;background:rgba(var(--columbina-mask-rgb),var(--columbina-mask-alpha));pointer-events:none}${tokenBlock('html body', { ...surfaces.light, ...labels.light })}${tokenBlock('html body[data-ds-dark-theme]', { ...surfaces.dark, ...labels.dark })}body[data-columbina-title="on"] [role="treeitem"][aria-selected="true"]{background:linear-gradient(90deg,rgba(126,170,255,0.32),rgba(126,170,255,0.12) 55%,rgba(126,170,255,0.04))!important}@supports ((-webkit-background-clip:text) or (background-clip:text)){body[data-columbina-title="on"] [role="treeitem"][aria-selected="true"]>span[class$="_title"]{background:linear-gradient(92deg,#8ecbff 0%,#b9a8ff 48%,#eef4ff 100%);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:600;filter:drop-shadow(0 0 6px rgba(126,170,255,0.5))}}</style>`
+  return `${STATIC_STYLE_MARKER}:root{--columbina-bg-image:${bgLight};--columbina-mask-alpha:${maskAlpha};--columbina-mask-rgb:${maskRgbLight}}body[data-ds-dark-theme]{--columbina-bg-image:${bgDark};--columbina-mask-rgb:${maskRgbDark}}body::before{content:"";position:fixed;inset:0;z-index:-2;background:var(--columbina-bg-image) center/cover no-repeat;pointer-events:none}body::after{content:"";position:fixed;inset:0;z-index:-1;background:rgba(var(--columbina-mask-rgb),var(--columbina-mask-alpha));pointer-events:none}${tokenBlock('html body', { ...surfaces.light, ...labels.light })}${tokenBlock('html body[data-ds-dark-theme]', { ...surfaces.dark, ...labels.dark })}html[data-windows-titlebar] [class$="_frame"]{background:var(--dsw-alias-bg-base)}html[data-windows-titlebar] [class$="_frame"]::before{background:var(--dsw-alias-bg-base)}body[data-columbina-title="on"] [role="treeitem"][aria-selected="true"]{background:linear-gradient(90deg,rgba(126,170,255,0.32),rgba(126,170,255,0.12) 55%,rgba(126,170,255,0.04))!important}@supports ((-webkit-background-clip:text) or (background-clip:text)){body[data-columbina-title="on"] [role="treeitem"][aria-selected="true"]>span[class$="_title"]{background:linear-gradient(92deg,#8ecbff 0%,#b9a8ff 48%,#eef4ff 100%);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:600;filter:drop-shadow(0 0 6px rgba(126,170,255,0.5))}}`
+}
+
+/** Build the static theme <style> element (legacy tapIndex fallback). */
+export function buildStaticStyle(config) {
+  return `<style data-plugin="dsh-columbina-theme" data-dsh-columbina-static="1">${buildStaticCss(config)}</style>`
+}
+
+/**
+ * Build the structured index injection rows for one config.
+ *
+ * The WebServer renders these rows into the served HTTP index and sends the
+ * same table to Electron, which applies it to its locally loaded index through
+ * the page-side interpreter. That shared table is what makes the wallpaper
+ * layers (and the title effect) work in Desktop as well as the browser.
+ * @param config - current plugin config (plain or volatile fields).
+ * @returns JSON-serializable IndexInjection rows.
+ */
+export function buildStaticInjections(config) {
+  const c = publicConfig(config)
+  const rows = [{ kind: 'style', text: buildStaticCss(c) }]
+  if (c.activeTitle !== false) rows.push({ kind: 'script', placement: 'body', text: TITLE_BOOT_SCRIPT })
+  return rows
 }
 
 /** Insert the static <style> into <head> and the title-attribute boot script after <body>. */
@@ -639,7 +672,7 @@ export function injectStaticTheme(html, config) {
     ? `${html.slice(0, head.index + head[0].length)}${style}${html.slice(head.index + head[0].length)}`
     : `${style}${html}`
   if (publicConfig(config).activeTitle !== false) {
-    const boot = `<script>document.body&&document.body.setAttribute('data-columbina-title','on')<\/script>`
+    const boot = `<script>${TITLE_BOOT_SCRIPT}<\/script>`
     const body = /<body(?:\s[^>]*)?>/i.exec(out)
     if (body) out = `${out.slice(0, body.index + body[0].length)}${boot}${out.slice(body.index + body[0].length)}`
   }
@@ -828,12 +861,26 @@ function serveCustom(res, name) {
 function mount(ctx, config = {}) {
   const store = createConfigStore(ctx, config)
 
+  // One structured row table feeds both index renderers: the HTTP SPA server
+  // (via renderIndex) and the Desktop shell (which collects this table over
+  // IPC and applies it to its local index before the app boots). Registered
+  // outside the webServer injection so the listener exists by the time the
+  // Desktop host collects the table right after boot.
+  ctx.on('webserver/index-inject', (table) => {
+    table.push(...buildStaticInjections(store.get()))
+  }, { prepend: true })
+
   if (typeof ctx.inject === 'function') {
     ctx.inject(['webServer'], (httpCtx) => {
-      httpCtx.effect(
-        () => httpCtx.webServer.tapIndex((html) => injectStaticTheme(html, store.get())),
-        'dsh-columbina-theme: static theme style',
-      )
+      // Hosts before the structured row API only run raw index taps; keep the
+      // old injection as a compatibility fallback (never both, or the layers
+      // would be injected twice).
+      if (typeof httpCtx.webServer.collectIndexInjections !== 'function') {
+        httpCtx.effect(
+          () => httpCtx.webServer.tapIndex((html) => injectStaticTheme(html, store.get())),
+          'dsh-columbina-theme: static theme style (legacy index tap)',
+        )
+      }
       httpCtx.effect(
         () => httpCtx.webServer.register({ kind: 'exact', path: CONFIG_ENDPOINT, handler: createConfigHandler(store) }),
         'dsh-columbina-theme: config endpoint',
