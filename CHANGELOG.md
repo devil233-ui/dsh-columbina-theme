@@ -26,6 +26,8 @@ All notable changes to this project are documented in this file.
 - 会话列表底部 24px 渐变遮罩（`._9lTDKa_fade`，`transparent → --dsw-specific-sidebar-fill`）被染成一条暗带 + 硬下沿：该 token 在整窗材质下必须给 `transparent`，给半透明就会露馅。
 - 输入框那圈圆角描边丢失：它其实是 composer 卡片自身 `rgba(255,255,255,.12) 0 0 0 .5px` 的 box-shadow 环（radius 28px），此前被通配的 `box-shadow:none` 一并清掉，现已按原生观感补回。
 - 悬停发送/停止按钮时整块会话区闪动：卡片上那层 `blur 20px` 的 `backdrop-filter` 会在卡片局部重绘时反复重新合成（Windows/Electron 上表现为闪）。改为不挂 `backdrop-filter`、底色提到 `0.92`，既不闪也能压住从输入框底下滚过的正文；提问选择卡片实测不受影响，保留模糊。
+- 审批卡片（`.j_8BDW_card`）整张透明：它同样以 `--dsw-specific-input-major` 铺底，token 归平后标题、命令与「允许 / 拒绝」按钮直接压在壁纸上。现按提问卡片同款玻璃补齐（0.34 蒙版 + 12px 模糊 + 0.5px 亮环 + 投影），浓度写死、不跟面板滑条走。
+- 旁问浮层（`@michengai/dsh-btw` 的 `.btw-selection-dialog` 提问框 / `.btw-selection-menu` 选中浮条 / `.btw-bubble` 回答卡）透到壁纸上：它们的底色是 `--dsw-alias-bg-layer-2`，暗色下落到半透明值时字就压在花纹上（薇斯纳下是实的是因为它不做整窗材质）。现在不依赖那个 token，直接给 0.94 实底 + 0.5px 亮环 + 投影。
 
 ### Notes
 
